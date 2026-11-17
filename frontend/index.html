@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQL Server → PostgreSQL Migration Engine</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<style>
+  [x-cloak] { display: none !important; }
+  .risk-high { @apply bg-red-100 text-red-800 border-red-300; }
+  .risk-medium { @apply bg-amber-100 text-amber-800 border-amber-300; }
+  .risk-low { @apply bg-green-100 text-green-800 border-green-300; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900" x-data="app()" x-init="init()">
+
+<div class="flex h-screen">
+  <!-- Sidebar -->
+  <aside class="w-64 bg-slate-900 text-white flex flex-col">
+    <div class="p-5 border-b border-slate-700">
+      <h1 class="text-lg font-bold">Migration Engine</h1>
+      <p class="text-xs text-slate-400">SQL Server → PostgreSQL</p>
+    </div>
+    <nav class="flex-1 p-3 space-y-1">
+      <button @click="view = 'dashboard'" :class="view==='dashboard' ? 'bg-slate-700' : ''" class="w-full text-left px-3 py-2 rounded text-sm">Dashboard</button>
+      <button @click="view = 'projects'" :class="view==='projects' ? 'bg-slate-700' : ''" class="w-full text-left px-3 py-2 rounded text-sm">Projects</button>
+      <template x-if="currentProject">
+        <div class="pt-4 border-t border-slate-700 mt-4">
+          <p class="text-xs text-slate-400 px-3 mb-2">Current Project</p>
+          <button @click="view = 'assessment'" class="w-full text-left px-3 py-2 rounded text-sm hover:bg-slate-800">Assessment</button>
+          <button @click="view = 'objects'" class="w-full text-left px-3 py-2 rounded text-sm hover:bg-slate-800">Objects</button>
+          <button @click="view = 'linked'" class="w-full text-left px-3 py-2 rounded text-sm hover:bg-slate-800">Linked Servers</button>
+          <button @click="view = 'checkpoints'" class="w-full text-left px-3 py-2 rounded text-sm hover:bg-slate-800">Checkpoints</button>
+          <button @click="view = 'report'" class="w-full text-left px-3 py-2 rounded text-sm hover:bg-slate-800">Report</button>
+        </div>
+      </template>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <main class="flex-1 overflow-auto p-6">
+    <!-- Dashboard -->
+    <div x-show="view === 'dashboard'" x-cloak>
+      <h2 class="text-2xl font-bold mb-6">Migration Dashboard</h2>
+      <div class="grid grid-cols-3 gap-4 mb-6">
+        <div class="bg-white p-5 rounded-xl shadow-sm border">
+          <p class="text-sm text-gray-500">Projects</p>
+          <p class="text-3xl font-bold" x-text="projects.length"></p>
+        </div>
+        <div class="bg-white p-5 rounded-xl shadow-sm border">
+          <p class="text-sm text-gray-500">Active Assessments</p>
+          <p class="text-3xl font-bold" x-text="projects.filter(p => p.status !== 'completed').length"></p>
+        </div>
+        <div class="bg-white p-5 rounded-xl shadow-sm border">
+          <p class="text-sm text-gray-500">Avg Risk Score</p>
+          <p class="text-3xl font-bold" x-text="avgRisk"></p>
+        </div>
+      </div>
+      <button @click="showNew = true" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium">+ New Migration Project</button>
+    </div>
+
+    <!-- Projects List -->
+    <div x-show="view === 'projects'" x-cloak>
+      <h2 class="text-2xl font-bold mb-4">Projects</h2>
+      <div class="space-y-3">
+        <template x-for="p in projects" :key="p.id">
+          <div class="bg-white p-4 rounded-xl border shadow-sm flex justify-between items-center cursor-pointer hover:border-blue-400" @click="openProject(p)">
+            <div>
+              <p class="font-semibold" x-text="p.name"></p>
+              <p class="text-sm text-gray-500" x-text="p.description || 'No description'"></p>
+            </div>
+            <div class="text-right">
+              <span class="text-xs px-2 py-1 rounded-full" :class="riskClass(p.risk_score)" x-text="'Risk ' + p.risk_score"></span>
+              <p class="text-xs text-gray-400 mt-1" x-text="new Date(p.created_at).toLocaleDateString()"></p>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Assessment -->
+    <div x-show="view === 'assessment' && currentProject" x-cloak>
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-2xl font-bold" x-text="currentProject.name + ' — Assessment'"></h2>
+        <span class="text-sm px-3 py-1 rounded-full" :class="riskClass(currentProject.risk_score)" x-text="'Overall Risk: ' + currentProject.risk_score"></span>
+      </div>
+
+      <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-white p-4 rounded-xl border text-center">
+          <p class="text-2xl font-bold" x-text="objectStats.total || 0"></p>
+          <p class="text-xs text-gray-500">Total Objects</p>
+        </div>
+        <div class="bg-white p-4 rounded-xl border text-center">
+          <p class="text-2xl font-bold text-red-600" x-text="objectStats.high || 0"></p>
+          <p class="text-xs text-gray-500">High Risk</p>
+        </div>
+        <div class="bg-white p-4 rounded-xl border text-center">
+          <p class="text-2xl font-bold" x-text="databases.length"></p>
+          <p class="text-xs text-gray-500">Databases</p>
+        </div>
+        <div class="bg-white p-4 rounded-xl border text-center">
+          <p class="text-2xl font-bold" x-text="linkedServers.length"></p>
+          <p class="text-xs text-gray-500">Linked Servers</p>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border p-5 mb-6">
+        <h3 class="font-semibold mb-3">Upload DDL / Schema</h3>
+        <input type="file" @change="uploadFile($event)" accept=".sql,.txt,.zip" class="text-sm">
+        <p class="text-xs text-gray-500 mt-2">Upload SQL Server DDL export or extraction script output</p>
+      </div>
+
+      <div class="bg-white rounded-xl border">
+        <div class="p-4 border-b font-semibold">Databases</div>
+        <div class="divide-y">
+          <template x-for="db in databases" :key="db.id">
+            <div class="p-4 flex justify-between">
+              <span x-text="db.name"></span>
+              <span class="text-sm text-gray-500" x-text="db.object_count + ' objects'"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Objects -->
+    <div x-show="view === 'objects' && currentProject" x-cloak>
+      <h2 class="text-2xl font-bold mb-4">Object Analysis</h2>
+      <div class="flex gap-2 mb-4">
+        <button @click="filterType=''" :class="!filterType ? 'bg-blue-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">All</button>
+        <button @click="filterType='stored_procedure'" :class="filterType==='stored_procedure' ? 'bg-blue-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">Procedures</button>
+        <button @click="filterType='table'" :class="filterType==='table' ? 'bg-blue-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">Tables</button>
+        <button @click="filterRisk='high'" :class="filterRisk==='high' ? 'bg-red-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">High Risk</button>
+      </div>
+      <div class="bg-white rounded-xl border divide-y max-h-[70vh] overflow-auto">
+        <template x-for="obj in filteredObjects" :key="obj.id">
+          <div class="p-4 hover:bg-gray-50">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="font-medium" x-text="obj.name"></p>
+                <p class="text-xs text-gray-500" x-text="obj.database_name + ' · ' + obj.object_type"></p>
+              </div>
+              <span class="text-xs px-2 py-0.5 rounded" :class="'risk-' + obj.risk_level" x-text="obj.risk_level"></span>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-1" x-show="obj.flags.length">
+              <template x-for="f in obj.flags">
+                <span class="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded" x-text="f"></span>
+              </template>
+            </div>
+            <div class="mt-1 text-xs text-blue-600" x-show="obj.linked_servers.length" x-text="'Linked: ' + obj.linked_servers.join(', ')"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Linked Servers -->
+    <div x-show="view === 'linked'" x-cloak>
+      <h2 class="text-2xl font-bold mb-4">Linked Servers</h2>
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm">
+        Linked servers cannot be auto-converted by AWS Transform. They require a human decision (reconfigure, use postgres_fdw, or move logic to application).
+      </div>
+      <div class="space-y-3">
+        <template x-for="ls in linkedServers" :key="ls.id">
+          <div class="bg-white p-4 rounded-xl border flex justify-between">
+            <div>
+              <p class="font-medium" x-text="ls.name"></p>
+              <p class="text-sm text-gray-500" x-text="ls.usage_count + ' usages in procedures'"></p>
+            </div>
+            <span class="text-xs px-2 py-1 bg-amber-100 text-amber-800 rounded">Manual Action Required</span>
+          </div>
+        </template>
+        <p x-show="!linkedServers.length" class="text-gray-500">No linked servers detected.</p>
+      </div>
+    </div>
+
+    <!-- Checkpoints -->
+    <div x-show="view === 'checkpoints'" x-cloak>
+      <h2 class="text-2xl font-bold mb-4">Human-in-the-Loop Checkpoints</h2>
+      <div class="space-y-3">
+        <template x-for="cp in checkpoints" :key="cp.id">
+          <div class="bg-white p-5 rounded-xl border">
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="font-semibold" x-text="cp.title"></p>
+                <p class="text-sm text-gray-600 mt-1" x-text="cp.description"></p>
+              </div>
+              <span class="text-xs px-2 py-1 rounded" :class="cp.status === 'approved' ? 'bg-green-100 text-green-800' : 'bg-gray-100'" x-text="cp.status"></span>
+            </div>
+            <div class="mt-4 flex gap-2" x-show="cp.status === 'pending'">
+              <button @click="decide(cp.id, 'approve')" class="bg-green-600 text-white text-sm px-3 py-1.5 rounded">Approve</button>
+              <button @click="decide(cp.id, 'reject')" class="bg-red-600 text-white text-sm px-3 py-1.5 rounded">Reject</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Report -->
+    <div x-show="view === 'report'" x-cloak>
+      <h2 class="text-2xl font-bold mb-4">Assessment Report</h2>
+      <div class="bg-white p-6 rounded-xl border" x-show="report">
+        <p class="text-lg font-semibold" x-text="report.project?.name"></p>
+        <p class="text-sm text-gray-500 mb-4" x-text="'Generated: ' + report.generated_at"></p>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div>Total Objects: <strong x-text="report.summary?.total_objects"></strong></div>
+          <div>High Risk: <strong class="text-red-600" x-text="report.summary?.high_risk_objects"></strong></div>
+          <div>Risk Score: <strong x-text="report.summary?.risk_score"></strong></div>
+        </div>
+        <div class="mt-4 p-4 bg-blue-50 rounded-lg text-sm" x-text="report.summary?.recommendation"></div>
+        <button @click="downloadReport()" class="mt-4 bg-slate-800 text-white px-4 py-2 rounded text-sm">Download JSON Report</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- New Project Modal -->
+<div x-show="showNew" class="fixed inset-0 bg-black/40 flex items-center justify-center" x-cloak>
+  <div class="bg-white p-6 rounded-xl w-96">
+    <h3 class="font-bold mb-4">New Migration Project</h3>
+    <input x-model="newName" placeholder="Project name" class="w-full border rounded px-3 py-2 mb-3 text-sm">
+    <textarea x-model="newDesc" placeholder="Description" class="w-full border rounded px-3 py-2 mb-4 text-sm" rows="2"></textarea>
+    <div class="flex gap-2 justify-end">
+      <button @click="showNew=false" class="px-3 py-1.5 text-sm">Cancel</button>
+      <button @click="createProject()" class="bg-blue-600 text-white px-4 py-1.5 rounded text-sm">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function app() {
+  return {
+    view: 'dashboard',
+    projects: [],
+    currentProject: null,
+    databases: [],
+    objects: [],
+    linkedServers: [],
+    checkpoints: [],
+    report: null,
+    filterType: '',
+    filterRisk: '',
+    showNew: false,
+    newName: '',
+    newDesc: '',
+    get avgRisk() {
+      if (!this.projects.length) return 0;
+      return Math.round(this.projects.reduce((a, p) => a + (p.risk_score || 0), 0) / this.projects.length);
+    },
+    get objectStats() {
+      return {
+        total: this.objects.length,
+        high: this.objects.filter(o => o.risk_level === 'high').length
+      };
+    },
+    get filteredObjects() {
+      return this.objects.filter(o => 
+        (!this.filterType || o.object_type === this.filterType) &&
+        (!this.filterRisk || o.risk_level === this.filterRisk)
+      );
+    },
+    riskClass(score) {
+      if (score >= 70) return 'bg-red-100 text-red-800';
+      if (score >= 40) return 'bg-amber-100 text-amber-800';
+      return 'bg-green-100 text-green-800';
+    },
+    async init() { await this.loadProjects(); },
+    async loadProjects() {
+      this.projects = await (await fetch('/api/projects')).json();
+    },
+    async createProject() {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: this.newName, description: this.newDesc})
+      });
+      const data = await res.json();
+      this.showNew = false;
+      this.newName = ''; this.newDesc = '';
+      await this.loadProjects();
+      const p = this.projects.find(x => x.id === data.id);
+      if (p) this.openProject(p);
+    },
+    async openProject(p) {
+      this.currentProject = p;
+      this.view = 'assessment';
+      await this.loadProjectData();
+    },
+    async loadProjectData() {
+      const id = this.currentProject.id;
+      const full = await (await fetch(`/api/projects/${id}`)).json();
+      this.databases = full.databases || [];
+      this.checkpoints = full.checkpoints || [];
+      this.objects = await (await fetch(`/api/projects/${id}/objects`)).json();
+      this.linkedServers = await (await fetch(`/api/projects/${id}/linked-servers`)).json();
+      this.report = await (await fetch(`/api/projects/${id}/report`)).json();
+    },
+    async uploadFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      await fetch(`/api/projects/${this.currentProject.id}/upload`, {method: 'POST', body: fd});
+      await this.loadProjectData();
+      await this.loadProjects();
+      alert('Analysis complete');
+    },
+    async decide(id, decision) {
+      await fetch(`/api/checkpoints/${id}/decide`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({decision})
+      });
+      await this.loadProjectData();
+    },
+    downloadReport() {
+      const blob = new Blob([JSON.stringify(this.report, null, 2)], {type: 'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `assessment-${this.currentProject.name}.json`;
+      a.click();
+    }
+  }
+}
+</script>
+</body>
+</html>
